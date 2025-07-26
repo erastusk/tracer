@@ -1,0 +1,132 @@
+package Cmd
+
+import (
+	"log"
+
+	"github/erastusk/tracer/internal/cache"
+	"github/erastusk/tracer/internal/confluent"
+	"github/erastusk/tracer/internal/msk"
+	"github/erastusk/tracer/internal/prompts"
+	"github/erastusk/tracer/internal/types"
+	"github/erastusk/tracer/internal/utils"
+
+	"github.com/spf13/cobra"
+)
+
+type CobraCMD interface {
+	Cmd() *cobra.Command
+}
+
+type KafkaType struct {
+	Type  string
+	Cache cache.Cache
+}
+
+func NewKafkaType(kafkatype string) *KafkaType {
+	cache := cache.NewCache(kafkatype)
+	return &KafkaType{
+		Type:  kafkatype,
+		Cache: *cache,
+	}
+}
+
+func (k *KafkaType) Cmd() *cobra.Command {
+	count := 0
+	var c types.PromptOptions
+	var b utils.KafkaApp
+	utils.InitColors()
+	switch k.Type {
+	case "msk":
+		b = utils.NewKafkaApp(msk.NewMsk())
+	case "confluent":
+		b = utils.NewKafkaApp(confluent.NewConfluent())
+	default:
+		// utils.Red.Println("Unknown kafa type exitin....")
+		log.Fatal("Unknown kafka type, exiting...")
+	}
+	return &cobra.Command{
+		Use:   k.Type,
+		Short: k.Type + " kafka Connectivity diagnosis tool",
+		Run: func(cmd *cobra.Command, args []string) {
+			options := []string{"TCP Connnectivity test", "Broker connectivity test", "List topics", "Produce", "Consume"}
+			for {
+				count++
+				if count > 0 {
+					c = k.Cache.LoadCache()
+				}
+				select {
+
+				case <-utils.Done:
+					utils.Green.Println("exiting....")
+					return
+				default:
+					switch prompts.GetUserPrompt(options) {
+					case "TCP Connnectivity test":
+						err := utils.TestConnectivity(prompts.GetUserPromptSingle("Please enter broker", false, c.Endpoint))
+						if err != nil {
+							utils.Red.Printf("TCP connection failed: %v\n", err)
+						}
+						utils.Green.Println("TCP connection succeeded to -> ", c.Endpoint)
+					case "Broker connectivity test":
+						z, err := prompts.GetPrompts(c, utils.Options)
+						if err != nil {
+							utils.Red.Println(err)
+						} else {
+							k.Cache.SaveCache(z)
+							err := b.App.Connectivity(z)
+							if err != nil {
+								utils.Red.Println("Broker connectivity was unsuccessful...")
+							}
+							utils.Green.Println("Broker connectivity was successful!")
+						}
+
+					case "List topics":
+						z, err := prompts.GetPrompts(c, utils.Options)
+						if err != nil {
+							utils.Red.Println(err)
+						} else {
+							k.Cache.SaveCache(z)
+							b.App.ListTopics(z)
+						}
+					case "Produce":
+						z, err := prompts.GetPrompts(c, utils.Options)
+						if err != nil {
+							utils.Red.Println(err)
+						} else {
+							k.Cache.SaveCache(z)
+							t := prompts.GetUserPromptSingle("Please enter topic", false, "")
+							if t == "" {
+								utils.Red.Println("Topic required")
+							} else {
+								err := b.App.Produce(z, t)
+								if err != nil {
+									utils.Red.Println("Producer unsuccessful...")
+								} else {
+									utils.Green.Printf("Successfully produced to topic %s\n", t)
+								}
+							}
+						}
+					case "Consume":
+						z, err := prompts.GetPrompts(c, utils.Options)
+						if err != nil {
+							utils.Red.Println(err)
+						} else {
+							k.Cache.SaveCache(z)
+							t := prompts.GetUserPromptSingle("Please enter topic", false, "")
+							if t == "" {
+								utils.Red.Println("Topic required")
+							} else {
+								err := b.App.Consume(z, t)
+								if err != nil {
+									utils.Red.Println("Consumer unsuccessful...")
+								} else {
+									utils.Green.Printf("Successfully consumed from topic %s\n", t)
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+	}
+}
